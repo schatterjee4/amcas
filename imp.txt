@@ -1,0 +1,229 @@
+@if "%SCM_TRACE_LEVEL%" NEQ "4" @echo off
+
+:: ----------------------
+:: KUDU Deployment Script
+:: Version: 0.1.5
+:: ----------------------
+
+:: Prerequisites
+:: -------------
+
+:: Verify node.js installed
+where node 2>nul >nul
+IF %ERRORLEVEL% NEQ 0 (
+  echo Missing node.js executable, please install node.js, if already installed make sure it can be reached from current environment.
+  goto error
+)
+
+:: Setup
+:: -----
+
+setlocal enabledelayedexpansion
+
+SET ARTIFACTS=%~dp0%..\artifacts
+
+IF NOT DEFINED DEPLOYMENT_SOURCE (
+  SET DEPLOYMENT_SOURCE=%~dp0%.
+)
+
+IF NOT DEFINED DEPLOYMENT_DIST (
+  SET DEPLOYMENT_DIST=%~dp0%dist\prod
+)
+
+IF NOT DEFINED DEPLOYMENT_TARGET (
+  SET DEPLOYMENT_TARGET=%ARTIFACTS%\wwwroot
+)
+
+IF NOT DEFINED NEXT_MANIFEST_PATH (
+  SET NEXT_MANIFEST_PATH=%ARTIFACTS%\manifest
+
+  IF NOT DEFINED PREVIOUS_MANIFEST_PATH (
+    SET PREVIOUS_MANIFEST_PATH=%ARTIFACTS%\manifest
+  )
+)
+
+IF NOT DEFINED KUDU_SYNC_CMD (
+  :: Install kudu sync
+  echo Installing Kudu Sync
+  call npm --registry "http://registry.npmjs.org/" install kudusync -g
+  IF !ERRORLEVEL! NEQ 0 goto error
+
+  :: Locally just running "kuduSync" would also work
+  SET KUDU_SYNC_CMD=node "%appdata%\npm\node_modules\kuduSync\bin\kuduSync"
+)
+
+IF NOT DEFINED GRUNT_CMD (
+  :: Install grunt
+  echo Installing Grunt
+  call npm --registry "http://registry.npmjs.org/" install grunt-cli
+  IF !ERRORLEVEL! NEQ 0 goto error
+
+  :: Locally just running "grunt" would also work
+  SET GRUNT_CMD=node "%appdata%\npm\node_modules\grunt-cli\bin\grunt"
+
+)
+
+
+goto Deployment
+
+:: Utility Functions
+:: -----------------
+
+:SelectNodeVersion
+
+IF DEFINED KUDU_SELECT_NODE_VERSION_CMD (
+  :: The following are done only on Windows Azure Websites environment
+  call %KUDU_SELECT_NODE_VERSION_CMD% "%DEPLOYMENT_SOURCE%" "%DEPLOYMENT_TARGET%" "%DEPLOYMENT_TEMP%"
+  IF !ERRORLEVEL! NEQ 0 goto error
+
+  IF EXIST "%DEPLOYMENT_TEMP%\__nodeVersion.tmp" (
+    SET /p NODE_EXE=<"%DEPLOYMENT_TEMP%\__nodeVersion.tmp"
+    IF !ERRORLEVEL! NEQ 0 goto error
+  )
+
+  IF EXIST "%DEPLOYMENT_TEMP%\__npmVersion.tmp" (
+    SET /p NPM_JS_PATH=<"%DEPLOYMENT_TEMP%\__npmVersion.tmp"
+    IF !ERRORLEVEL! NEQ 0 goto error
+  )
+
+  IF NOT DEFINED NODE_EXE (
+    SET NODE_EXE=node
+  )
+
+  SET NPM_CMD="!NODE_EXE!" "!NPM_JS_PATH!"
+) ELSE (
+  SET NPM_CMD=npm --registry "http://registry.npmjs.org/"
+  SET NODE_EXE=node
+)
+
+goto :EOF
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:: Deployment
+:: ----------
+
+:Deployment
+echo Handling node.js deployment.
+echo %DEPLOYMENT_SOURCE%
+
+:: 1. Select node version
+call :SelectNodeVersion
+
+:: 2. Install npm packages
+echo Installing npm dev dependendencies
+if EXIST "%DEPLOYMENT_SOURCE%\package.json" (
+  pushd %DEPLOYMENT_SOURCE%
+  echo Cleaning NPM cache.
+  call !NPM_CMD! cache clean
+  call !NPM_CMD! install --development
+  IF !ERRORLEVEL! NEQ 0 goto error
+  popd
+)
+
+:: 3. Run grunt prod task
+pushd %DEPLOYMENT_SOURCE%
+call !GRUNT_CMD! prod
+popd
+
+:: 4. KuduSync
+IF /I "%IN_PLACE_DEPLOYMENT%" NEQ "1" (
+  call %KUDU_SYNC_CMD% -v 50 -f "%DEPLOYMENT_DIST%" -t "%DEPLOYMENT_TARGET%" -n "%NEXT_MANIFEST_PATH%" -p "%PREVIOUS_MANIFEST_PATH%" -i ".git;.hg;.deployment;deploy.cmd"
+  IF !ERRORLEVEL! NEQ 0 goto error
+)
+
+:: 5. Install npm packages
+IF EXIST "%DEPLOYMENT_TARGET%\package.json" (
+  pushd %DEPLOYMENT_TARGET%
+  call !NPM_CMD! install --production
+  IF !ERRORLEVEL! NEQ 0 goto error
+  popd
+)
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+:: Post deployment stub
+call %POST_DEPLOYMENT_ACTION%
+IF !ERRORLEVEL! NEQ 0 goto error
+
+goto end
+
+:error
+echo An error has occurred during web site deployment.
+call :exitSetErrorLevel
+call :exitFromFunction 2>nul
+
+:exitSetErrorLevel
+exit /b 1
+
+:exitFromFunction
+()
+
+:end
+echo Finished successfully.
+And here is the log for the deployment from the Azure portal
+
+Command: deploy.cmd
+Installing Grunt
+npm WARN package.json api@0.1.0 No README.md file found!
+npm http GET http://registry.npmjs.org/grunt-cli
+npm http 200 http://registry.npmjs.org/grunt-cli
+npm http GET http://registry.npmjs.org/grunt-cli/-/grunt-cli-0.1.13.tgz
+
+*... A lot of successful package installs, removed due to character limits ...*
+
+npm http 200 http://registry.npmjs.org/sigmund/-/sigmund-1.0.0.tgz
+npm http 200 http://registry.npmjs.org/lru-cache/-/lru-cache-2.5.0.tgz
+npm WARN prefer global grunt-cli@0.1.13 should be installed with -g
+grunt-cli@0.1.13 node_modules\grunt-cli
+├── resolve@0.3.1
+├── nopt@1.0.10 (abbrev@1.0.5)
+└── findup-sync@0.1.3 (lodash@2.4.1, glob@3.2.11)
+Handling node.js deployment.
+D:\home\site\repository
+Using start-up script app.js from package.json.
+Generated web.config.
+The package.json file does not specify node.js engine version constraints.
+The node.js application will run with the default node.js version 0.10.5.
+Installing npm dev dependendencies
+Cleaning NPM cache.
+npm WARN package.json api@0.1.0 No README.md file found!
+npm http GET https://registry.npmjs.org/sails
+npm http GET https://registry.npmjs.org/grunt/0.4.5
+npm http 200 https://registry.npmjs.org/grunt/0.4.5
+
+*... A lot of successful package installs, removed due to character limits ...*
+
+npm http GET https://registry.npmjs.org/lodash
+npm http GET https://registry.npmjs.org/maxmin/-/maxmin-0.1.0.tgz
+npm WARN deprecated grunt-lib-contrib@0.7.1: DEPRECATED. See readme: https://github.com/gruntjs/grunt-lib-contrib
+npm http GET https://registry.npmjs.org/chalk/-/chalk-0.4.0.tgz
+
+*... A lot of successful package installs, removed due to character limits ...*
+
+npm http 200 https://registry.npmjs.org/coffee-script/-/coffee-script-1.7.1.tgz
+npm http 200 https://registry.npmjs.org/uglify-js
+npm ERR! Error: ENOENT, chmod 'D:\home\site\repository\node_modules\sails\node_modules\i18n\.travis.yml'
+npm ERR! If you need help, you may report this log at:
+npm ERR!     <http://github.com/isaacs/npm/issues>
+npm ERR! or email it to:
+npm ERR!     <npm-@googlegroups.com>
+ npm ERR! System Windows_NT 6.2.9200
+npm ERR! command "D:\\Program Files (x86)\\nodejs\\0.10.5\\node.exe" "D:\\Program Files (x86)\\npm\\1.2.18\\node_modules\\npm\\bin\\npm-cli.js" "install" "--development"
+npm ERR! cwd D:\home\site\repository
+npm ERR! node -v v0.10.5
+npm ERR! npm -v 1.2.18
+npm ERR! path D:\home\site\repository\node_modules\sails\node_modules\i18n\.travis.yml
+npm ERR! fstream_path D:\home\site\repository\node_modules\sails\node_modules\i18n\.travis.yml
+npm ERR! fstream_type File
+npm ERR! fstream_class FileWriter
+npm ERR! fstream_finish_call chmod
+npm ERR! code ENOENT
+npm ERR! errno 34
+npm ERR! fstream_stack D:\Program Files (x86)\npm\1.2.18\node_modules\npm\node_modules\fstream\lib\writer.js:305:19
+npm ERR! fstream_stack Object.oncomplete (fs.js:107:15)
+npm ERR! error rolling back Error: ENOTEMPTY, rmdir 'D:\home\site\repository\node_modules\sails\node_modules\semver'
+npm ERR! error rolling back  sails@0.10.5 { [Error: ENOTEMPTY, rmdir 'D:\home\site\repository\node_modules\sails\node_modules\semver']
+npm ERR! error rolling back   errno: 53,
+npm ERR! error rolling back   code: 'ENOTEMPTY',
+npm ERR! error rolling back   path: 'D:\\home\\site\\repository\\node_modules\\sails\\node_modules\\semver' }
+npm ERR! Error
